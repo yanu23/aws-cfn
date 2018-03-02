@@ -1,0 +1,309 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: v0.1 | Yannick Tresch | Basestack for production workloads in VPCs
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: 'Section 1 : Tags'
+        Parameters:
+          - OwnerTag
+          - Environment
+      - Label:
+          default: 'Section 2 : Availability Zones'
+        Parameters:
+          - AvailabilityZone1
+          - AvailabilityZone2
+      - Label:
+          default: 'Section 3 : Internet Acces for private Subnets'
+        Parameters:
+          - NatGatewayInVPC
+      - Label:
+          default: 'Section 4 : Ip Cidrs'
+        Parameters:
+          - VpcCidr
+          - PublicSubnet1Cidr
+          - PublicSubnet2Cidr
+          - PrivateSubnet1Cidr
+          - PrivateSubnet2Cidr
+
+Parameters:
+  OwnerTag:
+    Description: Tagging for resources
+    Type: String
+  Environment:
+    Description: What kind of environment is it?
+    AllowedValues:
+      - PRD
+      - DEV
+      - TST
+    Type: String 
+  AvailabilityZone1:
+    Description: In which AZ should your first subnet be created?
+    Type: AWS::EC2::AvailabilityZone::Name 
+  AvailabilityZone2:
+    Description: In which AZ should your second subnet be created?
+    Type: AWS::EC2::AvailabilityZone::Name 
+  NatGatewayInVPC:
+    Description: Do you need a Nat Gateway?
+    AllowedValues:
+      - true
+      - false
+    Default: false
+    Type: String
+  VpcCidr:
+    Description: Which Cidr should your VPC have?  
+    Default: 10.0.0.0/16
+    Type: String
+  PublicSubnet1Cidr:
+    Description: Which Cidr should your public Subnet 1 have?  
+    Default: 10.0.10.0/24
+    Type: String
+  PublicSubnet2Cidr:
+    Description: Which Cidr should your public Subnet 2 have?  
+    Default: 10.0.11.0/24
+    Type: String
+  PrivateSubnet1Cidr:
+    Description: Which Cidr should your private Subnet 1 have?  
+    Default: 10.0.20.0/24
+    Type: String
+  PrivateSubnet2Cidr:
+    Description: Which Cidr should your private Subnet 2 have?  
+    Default: 10.0.21.0/24
+    Type: String
+
+Conditions:
+  NatGatewayTrue: !Equals [ !Ref NatGatewayInVPC, True ]
+
+Resources:
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone1
+      CidrBlock: !Ref PublicSubnet1Cidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-Public1
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone2
+      CidrBlock: !Ref PublicSubnet2Cidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-Public2
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: !Ref AvailabilityZone1
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-Private1
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone2
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-Private2
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  IGW:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-IGW
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  IgwAttachemt:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      InternetGatewayId: !Ref IGW
+      VpcId: !Ref VPC
+
+  PublicRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-PublicRT
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  RouteToInternet:
+    Type: "AWS::EC2::Route"
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicRouteTableAssociation1:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTableAssociation2:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  NatGateway:
+    Type: "AWS::EC2::NatGateway"
+    Condition: NatGatewayTrue
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      AllocationId: !GetAtt Eip.AllocationId
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-NatGW
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-${Environment}-VPC-NetRT
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateRouteTableAssociation1:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTableAssociation2:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  RouteToNat:
+    Type: "AWS::EC2::Route"
+    Condition: NatGatewayTrue
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NatGateway
+
+  Eip:
+    Type: "AWS::EC2::EIP"
+    Condition: NatGatewayTrue
+    DependsOn: VPC
+    Properties:
+      Domain: vpc
+
+  
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
+
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet1Id'
+
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet2Id'
+
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet1Id'
+
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet2Id'
+
+  PublicRouteTable:
+    Value: !Ref PublicRouteTable
+    Export: 
+      Name: !Sub '${AWS::StackName}-PublicRouteTable'
+
+  PrivateRouteTable:
+    Value: !Ref PrivateRouteTable
+    Export: 
+      Name: !Sub '${AWS::StackName}-PrivateRouteTable'
+
+  PublicSubnet1AZ:
+    Value: !GetAtt PublicSubnet1.AvailabilityZone
+    Export: 
+      Name: !Sub '${AWS::StackName}-PublicSubnet1-AvailabilityZone'
+
+  PublicSubnet2AZ:
+    Value: !GetAtt PublicSubnet2.AvailabilityZone
+    Export: 
+      Name: !Sub '${AWS::StackName}-PublicSubnet2-AvailabilityZone'
+
+  PrivateSubnet1AZ:
+    Value: !GetAtt PrivateSubnet1.AvailabilityZone
+    Export: 
+      Name: !Sub '${AWS::StackName}-PrivateSubnet1-AvailabilityZone'
+
+  PrivateSubnet2AZ:
+    Value: !GetAtt PrivateSubnet2.AvailabilityZone
+    Export: 
+      Name: !Sub '${AWS::StackName}-PrivateSubnet2-AvailabilityZone'
