@@ -1,0 +1,365 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: v0.1 | Fast Lane | Yannick Tresch | Infrastructure for mail and web server
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: 'Section 1 : Tags'
+        Parameters:
+          - OwnerTag
+          - Environment
+      - Label:
+          default: 'Section 2 : Database'
+        Parameters:
+          - DbRootPassword
+      - Label:
+          default: 'Section 3 : Deployment'
+        Parameters:
+          - DeploymentBucket
+          - JoomlaKey
+          - DoveCotConfigKey
+          - PostfixConfigKey
+          - myCnfKey
+          - DumpKey
+      - Label:
+          default: 'Section 3 : DNS'
+        Parameters:
+          - CreateRecordSets
+          - HostedZoneName
+
+Parameters:
+  OwnerTag:
+    Description: Tagging for resources
+    Type: String
+  Environment:
+    Description: What kind of environment is it?
+    AllowedValues:
+      - PRD
+      - DEV
+      - TST
+    Type: String 
+  DbRootPassword:
+    Description: Password for mysql admin
+    Type: String
+    NoEcho: true
+  DeploymentBucket:
+    Description: Deployment Bucket Name
+    Type: String
+  JoomlaKey:
+    Description: joomla files
+    Type: String
+  DoveCotConfigKey:
+    Description: dovecot config key
+    Type: String
+  PostfixConfigKey:
+    Description: postfix config zip
+    Type: String
+  myCnfKey:
+    Description: My CNF file on S3
+    Type: String  
+  DumpKey:
+    Description: SQL dump on S3
+    Type: String  
+  CreateRecordSets:
+    Description: Create recordsets for this stack
+    Type: String    
+    AllowedValues:
+      - true
+      - false
+  HostedZoneName:
+    Description: Create recordsets for this stack
+    Type: String
+
+Conditions:
+  CreateRecordSetsTrue: !Equals [ !Ref CreateRecordSets, True ]
+
+Resources:
+  EC2:
+    Type: "AWS::EC2::Instance"
+    Metadata:
+      AWS::CloudFormation::Authentication:
+        S3AccessCreds:
+          type: S3
+          roleName: !Ref IAMRole
+      AWS::CloudFormation::Init:
+        configSets:
+          InstallAndRun: 
+          - Install
+          - Configure
+        Install:
+          packages:
+            yum:
+              mysql:
+              - 5.5
+              mysql-server:
+              - 5.5
+              mysql-libs:
+              - 5.5
+              php-mysql:
+              - 5.3.29 
+              php: 
+              - 5.3.29 
+              postfix: []
+              dovecot: []
+              httpd: []
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+              mode: "000400"
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.EC2.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2 --configsets InstallAndRun --region ${AWS::Region}
+                runas=root
+              mode: "000400"
+              owner: root
+              group: root
+            /etc/my.cnf:
+              source: !Sub https://${DeploymentBucket}.s3.amazonaws.com/${myCnfKey}
+              mode: "000400"
+              owner: mysql
+              group: mysql
+            /etc/mysql/mysql_alldbs.dump:
+              source: !Sub https://${DeploymentBucket}.s3.amazonaws.com/${DumpKey}
+              mode: "000444"
+              owner: mysql
+              group: mysql            
+          sources:
+            /var/www/html/: !Sub https://${DeploymentBucket}.s3.amazonaws.com/${JoomlaKey}
+            /etc/dovecot/: !Sub https://${DeploymentBucket}.s3.amazonaws.com/${DoveCotConfigKey}
+            /etc/opt/csw/postfix/: !Sub https://${DeploymentBucket}.s3.amazonaws.com/${PostfixConfigKey}
+          services:
+            sysvinit:
+              mysqld:
+                enabled: true
+                ensureRunning: true
+              httpd:
+                enabled: true
+                ensureRunning: true
+              postfix:
+                enabled: true
+                ensureRunning: true
+                sources:
+                - "/etc/opt/csw/postfix/"
+              dovecot:
+                enabled: true
+                ensureRunning: true
+                sources:
+                - "/etc/dovecot/"
+              sendmail:
+                enabled: false
+                ensureRunning: false
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                - "/etc/cfn/cfn-hup.conf"
+                - "/etc/cfn/hooks.d/cfn-auto-reloader.conf"         
+        Configure:
+          commands:
+            01_set_chmod_755:
+              command: chmod 755 /var/www/html/ -R
+            02_set_mysql_password:
+              command: !Sub mysqladmin -u root password '${DbRootPassword}'
+            03_import_mysql_dump:
+              command: !Sub mysql -u root --password '${DbRootPassword}' < /etc/mysql/mysql_alldbs.dump
+    Properties: 
+      AvailabilityZone: !ImportValue Main-Vpc-PublicSubnet1-AvailabilityZone
+      BlockDeviceMappings: 
+        - 
+          DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 100
+            DeleteOnTermination: false
+      ImageId: ami-5652ce39
+      InstanceType: t2.medium
+      KeyName: BOSitdefault
+      SecurityGroupIds: 
+        - !GetAtt SecurityGroup.GroupId
+      SubnetId: !ImportValue Main-Vpc-PublicSubnet1Id
+      IamInstanceProfile: !Ref IAMInstanceProfile
+      UserData:
+        Fn::Base64: !Join
+        - ''
+        - - "#!/bin/bash -xe\n"
+          - "yum update -y aws-cfn-bootstrap\n"
+          - "\n"
+          - "# Install the files and packages from the metadata\n"
+          - "/opt/aws/bin/cfn-init -v "
+          - "         --stack "
+          - !Ref AWS::StackName
+          - " "
+          - "         --resource EC2 "
+          - "         --configsets InstallAndRun "
+          - "         --region "
+          - !Ref AWS::Region
+          - "\n"
+          - "\n"
+          - "# Signal the status from cfn-init\n"
+          - "/opt/aws/bin/cfn-signal -e $? "
+          - "         --stack "
+          - !Ref AWS::StackName
+          - " "
+          - "         --resource EC2 "
+          - "         --region "
+          - !Ref AWS::Region
+          - "\n"
+          - "\n"
+      Tags: 
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+
+  IAMInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties: 
+      Roles:
+        - !Ref IAMRole
+
+  IAMRole:
+    Type: "AWS::IAM::Role"
+    Properties: 
+      Path: /
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Policies:
+        - 
+          PolicyName: "stack"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: "Allow"
+                Action: "cloudformation:DescribeStackResource"
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}*
+        - 
+          PolicyName: "s3"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: "Allow"
+                Action: 
+                - "s3:Get*"
+                - "s3:List*"
+                Resource: !Sub arn:aws:s3:::${DeploymentBucket}*
+
+  SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties: 
+      GroupDescription:default group
+      SecurityGroupIngress:
+        - 
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 110
+          ToPort: 110
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 143
+          ToPort: 143
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 25
+          ToPort: 25
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 995
+          ToPort: 995
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 993
+          ToPort: 993
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: 465
+          ToPort: 465
+          CidrIp: 0.0.0.0/0
+      Tags: 
+        - Key: Owner
+          Value: !Ref OwnerTag
+        - Key: Environment
+          Value: !Ref Environment
+      VpcId: !ImportValue Main-Vpc-VpcId
+
+  Eip:
+    Type: "AWS::EC2::EIP"
+    DeletionPolicy: Retain
+    Properties:
+      InstanceId: !Ref EC2
+      Domain: vpc
+
+  EipAssociation:
+    Type: "AWS::EC2::EIPAssociation"
+    Properties:
+      EIP: !Ref Eip
+      InstanceId: !Ref EC2
+
+  MailRecordDe:
+    Type: "AWS::Route53::RecordSet"
+    Condition: CreateRecordSetsTrue
+    Properties: 
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub mail.${HostedZoneName}
+      ResourceRecords:
+      - !Ref Eip
+      Type: A
+      TTL: 300
+
+  WwwRecordDe:
+    Type: "AWS::Route53::RecordSet"
+    Condition: CreateRecordSetsTrue
+    Properties: 
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub www.${HostedZoneName}
+      ResourceRecords:
+      - !Ref Eip
+      Type: A 
+      TTL: 300
+
+  RecordDe:
+    Type: "AWS::Route53::RecordSet"
+    Condition: CreateRecordSetsTrue
+    Properties: 
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub ${HostedZoneName}
+      ResourceRecords:
+      - !Ref Eip
+      Type: A
+      TTL: 300
