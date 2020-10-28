@@ -9,11 +9,6 @@ Metadata:
           - OwnerTag
           - Environment
       - Label:
-          default: 'Section 2 : Availability Zones'
-        Parameters:
-          - AvailabilityZone1
-          - AvailabilityZone2
-      - Label:
           default: 'Section 3 : Internet Acces for private Subnets'
         Parameters:
           - NatGatewayInVPC
@@ -37,12 +32,6 @@ Parameters:
       - DEV
       - TST
     Type: String 
-  AvailabilityZone1:
-    Description: In which AZ should your first subnet be created?
-    Type: AWS::EC2::AvailabilityZone::Name 
-  AvailabilityZone2:
-    Description: In which AZ should your second subnet be created?
-    Type: AWS::EC2::AvailabilityZone::Name 
   NatGatewayInVPC:
     Description: Do you need a Nat Gateway?
     AllowedValues:
@@ -90,7 +79,9 @@ Resources:
   PublicSubnet1:
     Type: "AWS::EC2::Subnet"
     Properties:
-      AvailabilityZone: !Ref AvailabilityZone1
+      AvailabilityZone: !Select 
+      - 0
+      - Fn::GetAZs: !Ref 'AWS::Region'
       CidrBlock: !Ref PublicSubnet1Cidr
       MapPublicIpOnLaunch: true
       VpcId: !Ref VPC
@@ -105,7 +96,9 @@ Resources:
   PublicSubnet2:
     Type: "AWS::EC2::Subnet"
     Properties:
-      AvailabilityZone: !Ref AvailabilityZone2
+      AvailabilityZone: !Select 
+      - 1
+      - Fn::GetAZs: !Ref 'AWS::Region'
       CidrBlock: !Ref PublicSubnet2Cidr
       MapPublicIpOnLaunch: true
       VpcId: !Ref VPC
@@ -121,8 +114,10 @@ Resources:
     Type: "AWS::EC2::Subnet"
     Properties:
       CidrBlock: !Ref PrivateSubnet1Cidr
-      AvailabilityZone: !Ref AvailabilityZone1
-      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select 
+      - 0
+      - Fn::GetAZs: !Ref 'AWS::Region'
+      MapPublicIpOnLaunch: false
       VpcId: !Ref VPC
       Tags:
         - Key: Name
@@ -135,9 +130,11 @@ Resources:
   PrivateSubnet2:
     Type: "AWS::EC2::Subnet"
     Properties:
-      AvailabilityZone: !Ref AvailabilityZone2
+      AvailabilityZone: !Select 
+      - 1
+      - Fn::GetAZs: !Ref 'AWS::Region'
       CidrBlock: !Ref PrivateSubnet2Cidr
-      MapPublicIpOnLaunch: true
+      MapPublicIpOnLaunch: false
       VpcId: !Ref VPC
       Tags:
         - Key: Name
